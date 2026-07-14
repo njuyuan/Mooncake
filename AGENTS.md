@@ -23,3 +23,28 @@
   rewrite unrelated files, do not include those unrelated edits in the PR.
 - Keep PRs lean: review `git diff` before staging, and include only changes
   required for the requested task.
+
+## Cursor Cloud specific instructions
+
+The Cloud VM is **CPU-only, no RDMA NIC, no etcd** (4 CPUs / ~15 GB RAM). System
+deps are already installed via `dependencies.sh` (Go at `/usr/local/go`,
+yalantinglibs installed system-wide). The project is prebuilt in `build/` and the
+non-CUDA wheel is installed in `.venv` (CLIs `mooncake_master`,
+`transfer_engine_bench`, `mooncake_http_metadata_server`).
+
+- **C++ compiler gotcha:** the base image's `c++`/`cc` alternatives point to a
+  clang that cannot link `libstdc++`, which breaks CMake's default compiler
+  detection (`cannot find -lstdc++`). They have been repointed to GCC. If a fresh
+  build hits that error, re-run
+  `sudo update-alternatives --set c++ /usr/bin/g++ && sudo update-alternatives --set cc /usr/bin/gcc`.
+- **Build with `-j2`, not `-j$(nproc)`** — heavy template files (yalantinglibs /
+  async_simple) OOM-kill `cc1plus` at `-j4` on 15 GB RAM.
+- Configure TCP-only: `-DUSE_CUDA=OFF -DUSE_ETCD=OFF -DSTORE_USE_ETCD=OFF -DWITH_EP=OFF`.
+- Runtime needs `/usr/local/go/bin` on `PATH` and
+  `build/mooncake-common:/usr/local/lib` on `LD_LIBRARY_PATH`; force TCP with
+  `MC_FORCE_TCP=true` and use `metadata_server=P2PHANDSHAKE` (no etcd) — see
+  `docs/source/getting_started/quick-start.md`.
+- Store demo: start `mooncake_master`, then `MooncakeDistributedStore().setup(...,
+  protocol="tcp", ...)` and `put`/`get`.
+- Lint: `clang-format-20` (used by the C/C++ format hook) is not installed; the
+  `ruff` hook rewrites files repo-wide, so revert unrelated edits before staging.
