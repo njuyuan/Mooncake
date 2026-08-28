@@ -2707,7 +2707,7 @@ class MasterService {
     std::optional<DynamicReplicaPlan> SelectDynamicReplicaPlan(
         const ObjectMetadata& metadata,
         const std::optional<std::string>& preferred_target_segment,
-        std::string target_domain);
+        std::string target_domain, std::string requester_domain = {});
     tl::expected<UUID, ErrorCode> SubmitDynamicReplicaCopyTask(
         const ObjectIdentity& object_id, const DynamicReplicaPlan& plan,
         const UUID& lease_id, uint64_t version_epoch);

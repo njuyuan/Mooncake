@@ -84,6 +84,86 @@ class ReplicaSelectionTest : public ::testing::Test {
 
 // --- Base policy (scoring off): behaviour must be unchanged --------------
 
+TEST_F(ReplicaSelectionTest, LocalMemoryWinsEvenIfLocalNoFListedFirst) {
+    std::unordered_set<std::string> local = {"nodeB"};
+    std::vector<Replica::Descriptor> reps = {
+        MakeNoF("nodeB"),
+        MakeMemory("nodeB", "rdma"),
+    };
+    const auto* sel = SelectBestReplica(reps, local);
+    ASSERT_NE(sel, nullptr);
+    EXPECT_TRUE(sel->is_memory_replica());
+    EXPECT_EQ(
+        sel->get_memory_descriptor().buffer_descriptor.transport_endpoint_,
+        "nodeB");
+}
+
+TEST_F(ReplicaSelectionTest, SameHostMemoryBeatsRemoteMemory) {
+    std::unordered_set<std::string> local;  // pure client, no local mount
+    std::vector<Replica::Descriptor> reps = {
+        MakeMemory("nodeA:5000", "rdma"),
+        MakeMemory("nodeB:6000", "rdma"),
+    };
+    const auto* sel = SelectBestReplica(reps, local, "nodeB");
+    ASSERT_NE(sel, nullptr);
+    EXPECT_EQ(
+        sel->get_memory_descriptor().buffer_descriptor.transport_endpoint_,
+        "nodeB:6000");
+}
+
+TEST_F(ReplicaSelectionTest, ExactLocalEndpointStillBeatsSameHostMemory) {
+    std::unordered_set<std::string> local = {"nodeB:5000"};
+    std::vector<Replica::Descriptor> reps = {
+        MakeMemory("nodeB:6000", "rdma"),  // same host, other process
+        MakeMemory("nodeB:5000", "tcp"),   // exact local mount
+    };
+    const auto* sel = SelectBestReplica(reps, local, "nodeB");
+    ASSERT_NE(sel, nullptr);
+    EXPECT_EQ(
+        sel->get_memory_descriptor().buffer_descriptor.transport_endpoint_,
+        "nodeB:5000");
+}
+
+TEST_F(ReplicaSelectionTest, SameHostMemoryBeatsLocalNoF) {
+    std::unordered_set<std::string> local = {"nodeB:5000"};
+    std::vector<Replica::Descriptor> reps = {
+        MakeNoF("nodeB:5000"),
+        MakeMemory("nodeB:6000", "rdma"),
+    };
+    const auto* sel = SelectBestReplica(reps, local, "nodeB");
+    ASSERT_NE(sel, nullptr);
+    EXPECT_TRUE(sel->is_memory_replica());
+    EXPECT_EQ(
+        sel->get_memory_descriptor().buffer_descriptor.transport_endpoint_,
+        "nodeB:6000");
+}
+
+TEST_F(ReplicaSelectionTest, EmptyLocalHostKeepsHistoricalRemoteOrder) {
+    std::unordered_set<std::string> local;
+    std::vector<Replica::Descriptor> reps = {
+        MakeMemory("nodeA:5000", "tcp"),
+        MakeMemory("nodeB:6000", "rdma"),
+    };
+    const auto* sel = SelectBestReplica(reps, local, "");
+    ASSERT_NE(sel, nullptr);
+    EXPECT_EQ(
+        sel->get_memory_descriptor().buffer_descriptor.transport_endpoint_,
+        "nodeA:5000");
+}
+
+TEST_F(ReplicaSelectionTest, SameHostNoFBeatsRemoteMemory) {
+    std::unordered_set<std::string> local;
+    std::vector<Replica::Descriptor> reps = {
+        MakeMemory("nodeA:5000", "rdma"),
+        MakeNoF("nodeB:6000"),
+    };
+    const auto* sel = SelectBestReplica(reps, local, "nodeB");
+    ASSERT_NE(sel, nullptr);
+    EXPECT_TRUE(sel->is_nof_replica());
+    EXPECT_EQ(sel->get_nof_descriptor().buffer_descriptor.transport_endpoint_,
+              "nodeB:6000");
+}
+
 TEST_F(ReplicaSelectionTest, LocalMemoryAlwaysWins) {
     std::unordered_set<std::string> local = {"nodeB"};
     std::vector<Replica::Descriptor> reps = {

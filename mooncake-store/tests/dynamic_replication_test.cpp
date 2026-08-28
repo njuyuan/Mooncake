@@ -32,13 +32,15 @@ class DynamicReplicationTest : public ::testing::Test {
     };
 
     MountedSegmentContext PrepareSegment(MasterService& service,
-                                         std::string name, size_t base) const {
+                                         std::string name, size_t base,
+                                         std::string host_id = {}) const {
         Segment segment;
         segment.id = generate_uuid();
         segment.name = std::move(name);
         segment.base = base;
         segment.size = kDefaultSegmentSize;
         segment.te_endpoint = segment.name;
+        segment.host_id = std::move(host_id);
         UUID client_id = generate_uuid();
         auto mount_result = service.MountSegment(segment, client_id);
         EXPECT_TRUE(mount_result.has_value());
@@ -418,7 +420,7 @@ TEST_F(DynamicReplicationTest, BelowFrequencyThresholdDoesNotQueueCopy) {
     EXPECT_TRUE(tasks->empty());
 }
 
-TEST_F(DynamicReplicationTest, RejectDomainHintsBeforeDomainAwarePlacement) {
+TEST_F(DynamicReplicationTest, PreferTargetDomainHost) {
     MasterServiceConfig config;
     config.dynamic_replication_mode = "enforce";
     config.dynamic_replication_heat_window_seconds = 10;
@@ -426,17 +428,66 @@ TEST_F(DynamicReplicationTest, RejectDomainHintsBeforeDomainAwarePlacement) {
     config.dynamic_replication_max_memory_replicas = 2;
     MasterService service(config);
 
-    auto source = PrepareSegment(service, "segment_0", 0x870000000);
-    PrepareSegment(service, "segment_1", 0x880000000);
+    auto source = PrepareSegment(service, "segment_0", 0x870000000, "host-a");
+    PrepareSegment(service, "segment_1", 0x880000000, "host-b");
+    auto target_c = PrepareSegment(service, "segment_2", 0x890000000, "host-c");
     PutObject(service, source.client_id, "domain-hint-key",
               source.segment_name);
 
     auto proposal = BuildProposal(service, "domain-hint-key");
-    proposal.target_domain = "domain-a";
+    proposal.target_domain = "host-c";
 
     auto lease = service.SubmitReplicaActionProposal(proposal);
-    ASSERT_FALSE(lease.has_value());
-    EXPECT_EQ(lease.error(), ErrorCode::INVALID_PARAMS);
+    ASSERT_TRUE(lease.has_value());
+    EXPECT_EQ(lease->source_segment, source.segment_name);
+    EXPECT_EQ(lease->target_segment, target_c.segment_name);
+    EXPECT_EQ(lease->target_domain, "host-c");
+}
+
+TEST_F(DynamicReplicationTest, PreferRequesterDomainWhenTargetDomainEmpty) {
+    MasterServiceConfig config;
+    config.dynamic_replication_mode = "enforce";
+    config.dynamic_replication_heat_window_seconds = 10;
+    config.dynamic_replication_admission_qps_threshold = 0.2;
+    config.dynamic_replication_max_memory_replicas = 2;
+    MasterService service(config);
+
+    auto source = PrepareSegment(service, "segment_0", 0x8A0000000, "host-a");
+    PrepareSegment(service, "segment_1", 0x8B0000000, "host-b");
+    auto target_c = PrepareSegment(service, "segment_2", 0x8C0000000, "host-c");
+    PutObject(service, source.client_id, "requester-domain-key",
+              source.segment_name);
+
+    auto proposal = BuildProposal(service, "requester-domain-key");
+    proposal.requester_domain = "host-c";
+
+    auto lease = service.SubmitReplicaActionProposal(proposal);
+    ASSERT_TRUE(lease.has_value());
+    EXPECT_EQ(lease->target_segment, target_c.segment_name);
+    EXPECT_EQ(lease->target_domain, "host-c");
+}
+
+TEST_F(DynamicReplicationTest, DomainAlreadyHasReplicaFallsBackToOtherHost) {
+    MasterServiceConfig config;
+    config.dynamic_replication_mode = "enforce";
+    config.dynamic_replication_heat_window_seconds = 10;
+    config.dynamic_replication_admission_qps_threshold = 0.2;
+    config.dynamic_replication_max_memory_replicas = 2;
+    MasterService service(config);
+
+    auto source = PrepareSegment(service, "segment_0", 0x8D0000000, "host-a");
+    PrepareSegment(service, "segment_1", 0x8E0000000, "host-a");
+    auto other = PrepareSegment(service, "segment_2", 0x8F0000000, "host-b");
+    PutObject(service, source.client_id, "domain-fallback-key",
+              source.segment_name);
+
+    auto proposal = BuildProposal(service, "domain-fallback-key");
+    proposal.target_domain = "host-a";
+
+    auto lease = service.SubmitReplicaActionProposal(proposal);
+    ASSERT_TRUE(lease.has_value());
+    EXPECT_EQ(lease->target_segment, other.segment_name);
+    EXPECT_EQ(lease->target_domain, "host-a");
 }
 
 TEST_F(DynamicReplicationTest, LeaseDeadlineDoesNotExceedProposalDeadline) {

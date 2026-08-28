@@ -674,6 +674,8 @@ class Client {
         return endpoints;
     }
 
+    [[nodiscard]] const std::string& GetHostId() const { return host_id_; }
+
     bool CanUseLocalMemcpy(const Replica::Descriptor& replica) const {
         if (!replica.is_memory_replica()) return false;
         return CanUseLocalMemcpy(replica.get_memory_descriptor()

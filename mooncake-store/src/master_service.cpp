@@ -8272,8 +8272,10 @@ std::optional<MasterService::DynamicReplicaPlan>
 MasterService::SelectDynamicReplicaPlan(
     const ObjectMetadata& metadata,
     const std::optional<std::string>& preferred_target_segment,
-    std::string target_domain) {
+    std::string target_domain, std::string requester_domain) {
     const std::string& object_key = metadata.user_key;
+    const std::string effective_domain =
+        !target_domain.empty() ? target_domain : std::move(requester_domain);
     std::unordered_set<std::string> existing_segments;
     std::unordered_set<std::string> existing_hosts;
     std::vector<std::string> source_segments;
@@ -8350,17 +8352,20 @@ MasterService::SelectDynamicReplicaPlan(
         if (segment_access.QuerySegments(segment.name, used, capacity) !=
                 ErrorCode::OK ||
             capacity == 0) {
-            return std::tuple<bool, double, uint64_t>(
-                false, std::numeric_limits<double>::max(),
+            return std::tuple<bool, bool, double, uint64_t>(
+                false, false, std::numeric_limits<double>::max(),
                 std::numeric_limits<uint64_t>::max());
         }
         const bool different_host = segment.host_id.empty() ||
                                     existing_hosts.empty() ||
                                     !existing_hosts.contains(segment.host_id);
+        const bool domain_match =
+            !effective_domain.empty() && !segment.host_id.empty() &&
+            segment.host_id == effective_domain && different_host;
         const double util =
             static_cast<double>(used) / static_cast<double>(capacity);
-        return std::tuple<bool, double, uint64_t>(
-            different_host, util,
+        return std::tuple<bool, bool, double, uint64_t>(
+            domain_match, different_host, util,
             DynamicReplicationStableScore(object_key, segment.name));
     };
 
@@ -8375,7 +8380,7 @@ MasterService::SelectDynamicReplicaPlan(
         }
     }
     if (!target_segment.has_value()) {
-        std::optional<std::tuple<bool, double, uint64_t>> best_score;
+        std::optional<std::tuple<bool, bool, double, uint64_t>> best_score;
         for (const auto& [segment, client_id] : segments) {
             (void)client_id;
             if (!is_valid_target(segment)) {
@@ -8385,10 +8390,14 @@ MasterService::SelectDynamicReplicaPlan(
             if (!best_score.has_value() ||
                 std::get<0>(score) > std::get<0>(*best_score) ||
                 (std::get<0>(score) == std::get<0>(*best_score) &&
-                 std::get<1>(score) < std::get<1>(*best_score)) ||
+                 std::get<1>(score) > std::get<1>(*best_score)) ||
                 (std::get<0>(score) == std::get<0>(*best_score) &&
                  std::get<1>(score) == std::get<1>(*best_score) &&
-                 std::get<2>(score) < std::get<2>(*best_score))) {
+                 std::get<2>(score) < std::get<2>(*best_score)) ||
+                (std::get<0>(score) == std::get<0>(*best_score) &&
+                 std::get<1>(score) == std::get<1>(*best_score) &&
+                 std::get<2>(score) == std::get<2>(*best_score) &&
+                 std::get<3>(score) < std::get<3>(*best_score))) {
                 best_score = score;
                 target_segment = segment.name;
             }
@@ -8400,7 +8409,7 @@ MasterService::SelectDynamicReplicaPlan(
     }
     return DynamicReplicaPlan{.source_segment = source_segment,
                               .target_segment = *target_segment,
-                              .target_domain = std::move(target_domain)};
+                              .target_domain = std::move(effective_domain)};
 }
 
 tl::expected<ReplicaActionLease, ErrorCode>
@@ -8420,10 +8429,6 @@ MasterService::SubmitReplicaActionProposalLocked(
         return tl::make_unexpected(ErrorCode::INVALID_PARAMS);
     }
     if (proposal.proposal_id == UUID{0, 0}) {
-        return tl::make_unexpected(ErrorCode::INVALID_PARAMS);
-    }
-    if (!proposal.requester_domain.empty() || !proposal.target_domain.empty()) {
-        // Domain-aware admission and placement are reserved for the next stage.
         return tl::make_unexpected(ErrorCode::INVALID_PARAMS);
     }
     const int64_t now_ms = DynamicReplicationNowMs();
@@ -8505,7 +8510,8 @@ MasterService::SubmitReplicaActionProposalLocked(
     }
 
     auto plan = SelectDynamicReplicaPlan(
-        metadata, proposal.preferred_target_segment, proposal.target_domain);
+        metadata, proposal.preferred_target_segment, proposal.target_domain,
+        proposal.requester_domain);
     if (!plan.has_value()) {
         return tl::make_unexpected(ErrorCode::UNAVAILABLE_IN_CURRENT_STATUS);
     }

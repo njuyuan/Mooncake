@@ -11,7 +11,7 @@ Mooncake Store provides low-level object storage and management capabilities, in
 Key features of Mooncake Store include:
 - **Object-level storage operations**: Mooncake Store provides simple and easy-to-use object-level APIs, including `Put`, `Get`, and `Remove` operations.
 - **Optional object grouping**: Related objects can carry an optional group ID so that the Master applies best-effort shared lifecycle behavior. Object routing stays decoupled from groups (always `hash(tenant, key)`); grouping only carries a shared group TTL.
-- **Multi-replica support**: Mooncake Store supports storing multiple data replicas for the same object, effectively alleviating hotspots in access pressure. Each slice within an object is guaranteed to be placed in different segments, while different objects' slices may share segments. Replication operates on a best-effort basis.
+- **Multi-replica support**: Mooncake Store supports storing multiple data replicas for the same object, effectively alleviating hotspots in access pressure. Each slice within an object is guaranteed to be placed in different segments, while different objects' slices may share segments. Replication operates on a best-effort basis. Hot keys can grow extra MEMORY replicas at runtime (`--dynamic_replication_mode`) and readers prefer a local-endpoint or same-host replica when one exists. See [Topology-Aware Hot KV](topology-aware-hot-kv.md).
 - **Strong consistency**: Mooncake Store guarantees that `Get` operations always return correct and complete data. Once an object has been successfully `Put`, it remains immutable until removal, ensuring that all subsequent `Get` requests retrieve the most recent value.
 - **Zero-copy, bandwidth-saturating transfers**: Powered by the Transfer Engine, Mooncake Store eliminates redundant memory copies and exploits multi-NIC GPUDirect RDMA pooling to drive data across the network at full line rate while keeping CPU overhead negligible.
 - **High bandwidth utilization**: Mooncake Store supports striping and parallel I/O transfer of large objects, fully utilizing multi-NIC aggregated bandwidth for high-speed data reads and writes.
@@ -846,5 +846,6 @@ ssd-offload
 unified-parallel-tensor-io
 ssd-free-ratio-first-allocation
 engram
+topology-aware-hot-kv
 
 :::

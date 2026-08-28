@@ -41,6 +41,7 @@
 #include "utils.h"
 #include "rpc_types.h"
 #include "local_hot_cache.h"
+#include "replica_selection.h"
 #include "device/accelerator_registry.h"
 #ifdef USE_INTRA_NVLINK
 #include "gpu_vendor/intra_nvlink.h"
@@ -4936,43 +4937,15 @@ tl::expected<Replica::Descriptor, ErrorCode> Client::GetPreferredReplica(
     if (replica_list.empty()) {
         return tl::make_unexpected(ErrorCode::INVALID_PARAMS);
     }
-    if (mounted_segments_.empty() || replica_list.size() == 1) {
+    if (replica_list.size() == 1) {
         return replica_list[0];
     }
-
-    std::unordered_set<std::string> local_endpoints;
-    {
-        std::lock_guard<std::mutex> lock(mounted_segments_mutex_);
-        for (const auto& [segment_id, segment] : mounted_segments_) {
-            local_endpoints.insert(segment.te_endpoint);
-        }
+    const auto* best =
+        SelectBestReplica(replica_list, GetLocalEndpoints(), host_id_);
+    if (!best) {
+        return tl::make_unexpected(ErrorCode::INVALID_REPLICA);
     }
-
-    // Prefer local MEMORY replicas first
-    for (const auto& rep : replica_list) {
-        if (rep.is_memory_replica()) {
-            const auto& mem_desc = rep.get_memory_descriptor();
-            const std::string& endpoint =
-                mem_desc.buffer_descriptor.transport_endpoint_;
-            if (local_endpoints.count(endpoint)) {
-                return rep;
-            }
-        }
-    }
-
-    // Then prefer local NOF_SSD replicas
-    for (const auto& rep : replica_list) {
-        if (rep.is_nof_replica()) {
-            const auto& nof_desc = rep.get_nof_descriptor();
-            const std::string& endpoint =
-                nof_desc.buffer_descriptor.transport_endpoint_;
-            if (local_endpoints.count(endpoint)) {
-                return rep;
-            }
-        }
-    }
-
-    return replica_list[0];
+    return *best;
 }
 
 size_t Client::GetLocalHotCacheSizeFromEnv() {
