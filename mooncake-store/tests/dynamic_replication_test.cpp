@@ -430,8 +430,7 @@ TEST_F(DynamicReplicationTest, PreferTargetDomainHost) {
 
     auto source = PrepareSegment(service, "segment_0", 0x870000000, "host-a");
     PrepareSegment(service, "segment_1", 0x880000000, "host-b");
-    auto target_c =
-        PrepareSegment(service, "segment_2", 0x890000000, "host-c");
+    auto target_c = PrepareSegment(service, "segment_2", 0x890000000, "host-c");
     PutObject(service, source.client_id, "domain-hint-key",
               source.segment_name);
 
@@ -455,8 +454,7 @@ TEST_F(DynamicReplicationTest, PreferRequesterDomainWhenTargetDomainEmpty) {
 
     auto source = PrepareSegment(service, "segment_0", 0x8A0000000, "host-a");
     PrepareSegment(service, "segment_1", 0x8B0000000, "host-b");
-    auto target_c =
-        PrepareSegment(service, "segment_2", 0x8C0000000, "host-c");
+    auto target_c = PrepareSegment(service, "segment_2", 0x8C0000000, "host-c");
     PutObject(service, source.client_id, "requester-domain-key",
               source.segment_name);
 

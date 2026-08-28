@@ -150,8 +150,7 @@ inline const Replica::Descriptor *SelectBestReplica(
         if (r.status != ReplicaStatus::COMPLETE) continue;
         if (r.is_memory_replica()) {
             const auto &endpoint =
-                r.get_memory_descriptor()
-                    .buffer_descriptor.transport_endpoint_;
+                r.get_memory_descriptor().buffer_descriptor.transport_endpoint_;
             if (local_endpoints.count(endpoint)) {
                 if (!local_memory) local_memory = &r;
                 continue;
@@ -162,8 +161,7 @@ inline const Replica::Descriptor *SelectBestReplica(
             if (!first_memory) first_memory = &r;
         } else if (r.is_nof_replica()) {
             const auto &endpoint =
-                r.get_nof_descriptor()
-                    .buffer_descriptor.transport_endpoint_;
+                r.get_nof_descriptor().buffer_descriptor.transport_endpoint_;
             if (local_endpoints.count(endpoint)) {
                 if (!local_nof) local_nof = &r;
                 continue;

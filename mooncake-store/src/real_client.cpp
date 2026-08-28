@@ -2848,8 +2848,8 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
     // LOCAL_DISK data is on a remote node's SSD — must use offload RPC.
     // MEMORY / DISK / DFS are handled via client_->Get below.
     auto local_endpoints = client_->GetLocalEndpoints();
-    const auto *best_replica = SelectBestReplica(
-        replica_list, local_endpoints, client_->GetHostId());
+    const auto *best_replica =
+        SelectBestReplica(replica_list, local_endpoints, client_->GetHostId());
     if (!best_replica) {
         LOG(ERROR) << "No usable replica for key: " << key;
         return nullptr;
@@ -4062,8 +4062,8 @@ RealClient::build_ranged_read_metadata_from_query_result(
     }
 
     auto local_endpoints = client_->GetLocalEndpoints();
-    const auto *best_replica = SelectBestReplica(
-        replica_list, local_endpoints, client_->GetHostId());
+    const auto *best_replica =
+        SelectBestReplica(replica_list, local_endpoints, client_->GetHostId());
     if (!best_replica) {
         LOG(ERROR) << "No usable replica for key: " << key;
         return tl::unexpected(ErrorCode::INVALID_REPLICA);
