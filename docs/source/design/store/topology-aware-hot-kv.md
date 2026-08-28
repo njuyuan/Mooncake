@@ -35,10 +35,10 @@ partially wired into placement and read selection.
 | SSD promotion-on-hit | Master CountMinSketch; `--promotion_on_hit` copies SSD-only objects back to DRAM | Production; **tier promotion**, not extra MEMORY fanout |
 | Dynamic MEMORY fanout | `--dynamic_replication_mode={off,observe,enforce}` | Implemented; default `off` |
 | Replica copy two-phase | `DynamicReplicaCopyStart/End/Revoke` leases, worker `FetchTasks` | Implemented |
-| Read replica ranking | `SelectBestReplica`: local endpoint MEMORY, then local NOF, then first remote MEMORY | Production |
-| Opt-in remote scoring | `SetRemoteReplicaScorer` / `MC_STORE_REPLICA_SCORING=1`; builtin prefers RDMA over TCP | Merged ([#2781](https://github.com/kvcache-ai/Mooncake/pull/2781)); **no topology scorer is injected in production** |
+| Read replica ranking | `SelectBestReplica`: local-endpoint MEMORY, same-host MEMORY, local NOF, same-host NOF, then remote MEMORY | Production after this change; same-host requires a non-empty reader `host_id` |
+| Opt-in remote scoring | `SetRemoteReplicaScorer` / `MC_STORE_REPLICA_SCORING=1`; builtin prefers RDMA over TCP | Merged ([#2781](https://github.com/kvcache-ai/Mooncake/pull/2781)); **no topology/load scorer is injected in production** |
 | Transfer-engine locality | TENT `DeviceSelector` (`predicted_time * numa_penalty`); `segmentHost()` for same-host IPC | Production for **NIC pick after a replica is chosen**, not for replica pick |
-| Domain fields on proposals | `ReplicaActionProposal.requester_domain` / `target_domain` | **Reserved**; previously rejected with `INVALID_PARAMS` |
+| Domain fields on proposals | `ReplicaActionProposal.requester_domain` / `target_domain` treated as `host_id` | Phase 1 implemented; auto-Get fanout still spreads across hosts |
 
 ### Dynamic replication as implemented
 
@@ -72,24 +72,24 @@ Get(key)
   └─ Query master replica list
         └─ SelectBestReplica
               1. MEMORY whose transport_endpoint is an exact local mount
-              2. NOF whose transport_endpoint is an exact local mount
-              3. first remote MEMORY  (or scored remote MEMORY if opt-in)
-              4. remote NOF, LOCAL_DISK, DFS, DISK
+              2. MEMORY whose host matches the reader host_id
+              3. local-endpoint NOF, then same-host NOF
+              4. first remote MEMORY  (or scored remote MEMORY if opt-in)
+              5. remote NOF, LOCAL_DISK, DFS, DISK
 ```
 
 Exact `transport_endpoint` match is **same process / same mounted segment**,
-which enables local memcpy. Two clients on the same host with different ports
-are treated as remote, even though the path is intra-host RDMA.
-
-Dummy clients (`global_segment_size=0`) mount nothing, so
-`GetLocalEndpoints()` is empty. Locality for those readers is invisible unless
-`host_id` is used.
+which enables local memcpy. Same-host ranking covers two clients on one machine
+with different ports, including dummy clients that mount no segment, as long as
+`host_id` is set.
 
 ### Gaps this design closes
 
-1. **Reader locality is endpoint-exact, not host/rack/zone-aware.**
-2. **Hot replica placement spreads away from existing copies and ignores who
-   is reading.**
+1. **Reader locality used to be endpoint-exact.** Phase 1 adds host_id matching.
+   Rack/zone ranking still needs a cluster map.
+2. **Hot replica auto-fanout still spreads away from existing copies** because
+   Get does not name the reader. Explicit proposals can now target a `host_id`
+   domain.
 3. **Heat is global per key**, not per `(key, topology domain)`.
 4. **TENT NIC-role / load scores are not composed into replica ranking**
    (explicitly deferred by #2516 after #2781).
