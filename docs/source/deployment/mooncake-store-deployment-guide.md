@@ -662,6 +662,19 @@ Flags for controlling data movement between DRAM and SSD.
 
 Start with `--enable_offload=true` for eager asynchronous SSD persistence after `Put` completion. Add `--offload_on_evict=true` when you want SSD writes to happen only when memory pressure selects an object for eviction. Add `--promotion_on_hit=true` to allow hot SSD-only data to be promoted back to DRAM, and tune `--promotion_admission_threshold` to control how many observed reads are required before promotion is queued.
 
+### Dynamic MEMORY Replication
+
+Hot keys can receive extra MEMORY replicas after repeated reads. This is independent of SSD promotion-on-hit: promotion moves a key from SSD back to DRAM, while dynamic replication **adds** a DRAM copy on another host.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dynamic_replication_mode` | `off` | `off`, `observe` (log would-propose only), or `enforce` (copy extra MEMORY replicas) |
+| `--dynamic_replication_heat_window_seconds` | `10` | Sliding window used to measure per-key Get QPS |
+| `--dynamic_replication_admission_qps_threshold` | `0.8` | Minimum Get QPS in the heat window before a key is admitted |
+| `--dynamic_replication_max_memory_replicas` | `2` | Cap on MEMORY replicas created for one dynamically replicated key |
+
+`observe` is the safe first step. `enforce` copies a new replica onto a different host by default, or onto `target_domain` / `requester_domain` (treated as `host_id`) when a replica-action proposal supplies those fields. Reads prefer an exact local mount, then a same-host MEMORY replica, before remote copies. See [Topology-Aware Hot KV](../design/store/topology-aware-hot-kv.md) for the placement and ranking rules.
+
 For SSD offload, configure the disk path on each real client with `MOONCAKE_OFFLOAD_FILE_STORAGE_PATH`; the master tracks these objects as `LOCAL_DISK` replicas. Do not use the legacy `--root_fs_dir` parameter with `--enable_offload=true`.
 
 When `--offload_on_evict=true` is active, each `BatchEvict` cycle can queue at most `offloading_queue_limit * offload_cap_ratio` objects for SSD offload (default: `50000 * 0.5 = 25000`); objects exceeding this cap fall back to force-evict (discard) if `--offload_force_evict=true`, otherwise they remain in memory. For SSD-heavy workloads where NVMe bandwidth is underutilized while the KV-cache hit rate suffers, raise both `--offloading_queue_limit` and `--offload_cap_ratio` so more objects per cycle are actually persisted to SSD instead of discarded. Example: `--offloading_queue_limit=500000 --offload_cap_ratio=0.8` yields a per-cycle cap of `400000` (vs the default `25000`).
@@ -1137,6 +1150,12 @@ Local hot cache provides a DRAM read cache on top of SSD-resident objects for fa
 | `MC_STORE_LOCAL_HOT_BLOCK_SIZE` | `16777216` (16 MB) | Block size for hot cache **in raw bytes** (decimal integer, e.g., `2097152` for 2 MB). Suffixed forms like `"2mb"` are **not** parsed. Only read when the hot cache is enabled |
 | `MC_STORE_LOCAL_HOT_CACHE_USE_SHM` | unset | Set `1` to use memfd-backed shared memory |
 | `MC_STORE_LOCAL_HOT_ADMISSION_THRESHOLD` | unset | Minimum CountMinSketch count before a key is admitted to hot cache |
+
+#### Replica Selection
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MC_STORE_REPLICA_SCORING` | unset | Set `1` to rank remote MEMORY replicas with the builtin protocol scorer (RDMA before TCP) or an injected `ReplicaScorer`. Same-host ranking uses the client `host_id` and does not require this flag |
 
 #### Object-Level Checksum Diagnostics
 

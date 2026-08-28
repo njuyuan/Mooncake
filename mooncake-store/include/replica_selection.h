@@ -3,21 +3,27 @@
 // Replica selection for reads: given the list of replicas the master returned
 // for a key, choose which one to actually fetch from.
 //
-// The base policy is type + locality based (local MEMORY > local NOF_SSD >
-// remote MEMORY > remote NOF_SSD > LOCAL_DISK > DISK). On top of that, when a
-// key has more than one *remote* MEMORY replica, the historical code kept the
-// first one master happened to return, which is effectively arbitrary. This
-// header adds an opt-in scoring hook so a better remote replica can be picked
-// (issue #2516).
+// The base policy is type + locality based:
+//   local-endpoint MEMORY > same-host MEMORY > local-endpoint NOF >
+//   same-host NOF > remote MEMORY > remote NOF > LOCAL_DISK > DFS > DISK.
+// Same-host matching uses the reader host_id against segmentHost(endpoint) and
+// is skipped when host_id is empty, so historical tests and loopback clients
+// keep the older type+locality order. On top of that, when a key has more than
+// one *remote* MEMORY replica, the historical code kept the first one master
+// happened to return, which is effectively arbitrary. This header adds an
+// opt-in scoring hook so a better remote replica can be picked (issue #2516).
 //
 // Design constraints:
-//   * Disabled by default — behaviour is byte-identical to the historical
-//     "first remote MEMORY" pick unless the operator sets
+//   * Remote scoring is disabled by default — behaviour is byte-identical to
+//     the historical "first remote MEMORY" pick unless the operator sets
 //     MC_STORE_REPLICA_SCORING=1 or a scorer is injected.
+//   * Same-host ranking is a locality refinement, not scoring: it only applies
+//     when the caller passes a non-empty local_host.
 //   * This layer only sees what a replica descriptor carries (endpoint,
-//     protocol). Richer signals (NIC role, NUMA distance, live load) live in
-//     the transfer engine; they can be fed in via SetRemoteReplicaScorer()
-//     without mooncake-store growing a dependency on that layer.
+//     protocol) plus an optional reader host_id. Same-host matching reuses
+//     Transfer Engine's segmentHost()/hostEquals(). Richer signals (NIC role,
+//     NUMA distance, live load) live in TENT; they can be fed in via
+//     SetRemoteReplicaScorer() without mooncake-store depending on TENT.
 
 #pragma once
 
@@ -27,9 +33,11 @@
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
+#include "multi_transport_locality.h"
 #include "replica.h"
 
 namespace mooncake {
@@ -115,36 +123,63 @@ inline const Replica::Descriptor *PickBestRemoteMemory(
     return best;
 }
 
-// Select the best replica from a list: prefer local MEMORY, local NOF_SSD,
-// remote MEMORY, remote NOF_SSD, LOCAL_DISK, DFS, then DISK. Master may return
-// replicas in any order, so we always scan. When scoring is enabled and there
-// are multiple remote MEMORY replicas, the best-scoring one is chosen instead
-// of the first encountered.
+inline bool IsSameHostReplica(const std::string &endpoint,
+                              std::string_view local_host) {
+    if (local_host.empty() || endpoint.empty()) {
+        return false;
+    }
+    return hostEquals(segmentHost(endpoint), std::string(local_host));
+}
+
+// Select the best replica from a list. Master may return replicas in any
+// order, so we always scan. When local_host is non-empty, same-host MEMORY
+// (different process/port on the reader host) outranks local NOF and remote
+// MEMORY. When scoring is enabled and there are multiple remote MEMORY
+// replicas, the best-scoring one is chosen instead of the first encountered.
 inline const Replica::Descriptor *SelectBestReplica(
     const std::vector<Replica::Descriptor> &replicas,
-    const std::unordered_set<std::string> &local_endpoints) {
+    const std::unordered_set<std::string> &local_endpoints,
+    std::string_view local_host = {}) {
+    const Replica::Descriptor *local_memory = nullptr;
+    const Replica::Descriptor *same_host_memory = nullptr;
     const Replica::Descriptor *first_memory = nullptr;
+    const Replica::Descriptor *local_nof = nullptr;
+    const Replica::Descriptor *same_host_nof = nullptr;
     const Replica::Descriptor *first_nof = nullptr;
     for (const auto &r : replicas) {
         if (r.status != ReplicaStatus::COMPLETE) continue;
         if (r.is_memory_replica()) {
-            if (local_endpoints.count(
-                    r.get_memory_descriptor()
-                        .buffer_descriptor.transport_endpoint_)) {
-                return &r;  // local MEMORY — best case
+            const auto &endpoint =
+                r.get_memory_descriptor()
+                    .buffer_descriptor.transport_endpoint_;
+            if (local_endpoints.count(endpoint)) {
+                if (!local_memory) local_memory = &r;
+                continue;
+            }
+            if (!same_host_memory && IsSameHostReplica(endpoint, local_host)) {
+                same_host_memory = &r;
             }
             if (!first_memory) first_memory = &r;
         } else if (r.is_nof_replica()) {
-            if (local_endpoints.count(
-                    r.get_nof_descriptor()
-                        .buffer_descriptor.transport_endpoint_)) {
-                return &r;  // local NOF_SSD — also good
+            const auto &endpoint =
+                r.get_nof_descriptor()
+                    .buffer_descriptor.transport_endpoint_;
+            if (local_endpoints.count(endpoint)) {
+                if (!local_nof) local_nof = &r;
+                continue;
+            }
+            if (!same_host_nof && IsSameHostReplica(endpoint, local_host)) {
+                same_host_nof = &r;
             }
             if (!first_nof) first_nof = &r;
         }
     }
-    // No local replica. Among remote MEMORY replicas, optionally pick the
-    // best-scoring one instead of the first encountered (issue #2516).
+    if (local_memory) return local_memory;
+    if (same_host_memory) return same_host_memory;
+    if (local_nof) return local_nof;
+    if (same_host_nof) return same_host_nof;
+    // No local or same-host replica. Among remote MEMORY replicas, optionally
+    // pick the best-scoring one instead of the first encountered (issue #2516).
     if (first_memory && RemoteReplicaScoringEnabled()) {
         if (const auto *scored =
                 PickBestRemoteMemory(replicas, local_endpoints)) {

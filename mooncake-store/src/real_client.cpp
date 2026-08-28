@@ -2843,12 +2843,13 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
         return nullptr;
     }
 
-    // Select best replica: prefer local MEMORY, any MEMORY, local NOF, any NOF,
-    // LOCAL_DISK, DFS, then DISK.
+    // Select best replica: local-endpoint MEMORY, same-host MEMORY, local NOF,
+    // same-host NOF, remote MEMORY, remote NOF, LOCAL_DISK, DFS, then DISK.
     // LOCAL_DISK data is on a remote node's SSD — must use offload RPC.
     // MEMORY / DISK / DFS are handled via client_->Get below.
     auto local_endpoints = client_->GetLocalEndpoints();
-    const auto *best_replica = SelectBestReplica(replica_list, local_endpoints);
+    const auto *best_replica = SelectBestReplica(
+        replica_list, local_endpoints, client_->GetHostId());
     if (!best_replica) {
         LOG(ERROR) << "No usable replica for key: " << key;
         return nullptr;
@@ -3200,10 +3201,11 @@ RealClient::batch_get_buffer_internal(
             continue;
         }
 
-        // Select best replica: prefer local MEMORY, any MEMORY, local NOF,
-        // any NOF, LOCAL_DISK, DFS, then DISK.
+        // Select best replica: local-endpoint MEMORY, same-host MEMORY,
+        // local NOF, same-host NOF, remote MEMORY, then remaining tiers.
         const auto *best_replica =
-            SelectBestReplica(query_result_values.replicas, local_endpoints);
+            SelectBestReplica(query_result_values.replicas, local_endpoints,
+                              client_->GetHostId());
         if (!best_replica) {
             LOG(ERROR) << "No usable replica for key: " << key;
             continue;
@@ -4060,7 +4062,8 @@ RealClient::build_ranged_read_metadata_from_query_result(
     }
 
     auto local_endpoints = client_->GetLocalEndpoints();
-    const auto *best_replica = SelectBestReplica(replica_list, local_endpoints);
+    const auto *best_replica = SelectBestReplica(
+        replica_list, local_endpoints, client_->GetHostId());
     if (!best_replica) {
         LOG(ERROR) << "No usable replica for key: " << key;
         return tl::unexpected(ErrorCode::INVALID_REPLICA);
@@ -5117,10 +5120,11 @@ RealClient::batch_get_into_internal(const std::vector<std::string> &keys,
             continue;
         }
 
-        // Select best replica: prefer local MEMORY, any MEMORY, local NOF,
-        // any NOF, LOCAL_DISK, DFS, then DISK.
+        // Select best replica: local-endpoint MEMORY, same-host MEMORY,
+        // local NOF, same-host NOF, remote MEMORY, then remaining tiers.
         const auto *best_replica =
-            SelectBestReplica(query_result_values.replicas, local_endpoints);
+            SelectBestReplica(query_result_values.replicas, local_endpoints,
+                              client_->GetHostId());
         if (!best_replica) {
             LOG(ERROR) << "No usable replica for key: " << key;
             results[i] = tl::unexpected(ErrorCode::INVALID_REPLICA);
@@ -6188,11 +6192,12 @@ RealClient::batch_get_into_multi_buffers_internal(
             results.emplace_back(tl::unexpected(ErrorCode::INVALID_REPLICA));
             continue;
         }
-        // Select best replica: prefer local MEMORY, any MEMORY, local NOF,
-        // any NOF, LOCAL_DISK, DFS, then DISK. Master may return multiple
-        // replicas in any order, so always scan.
+        // Select best replica: local-endpoint MEMORY, same-host MEMORY,
+        // local NOF, same-host NOF, remote MEMORY, then remaining tiers.
+        // Master may return multiple replicas in any order, so always scan.
         const auto *best_replica =
-            SelectBestReplica(query_result_values.replicas, local_endpoints);
+            SelectBestReplica(query_result_values.replicas, local_endpoints,
+                              client_->GetHostId());
         if (!best_replica) {
             LOG(ERROR) << "No usable replica for key: " << key;
             results.emplace_back(tl::unexpected(ErrorCode::INVALID_REPLICA));
