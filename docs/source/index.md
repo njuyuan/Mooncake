@@ -135,6 +135,7 @@ design/conductor/index
 design/mooncake-reshard/index
 design/p2p-store
 design/hicache-design
+design/model-scaling-trend
 :::
 
 % API Documentation
